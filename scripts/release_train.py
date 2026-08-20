@@ -10,15 +10,9 @@ from datetime import datetime, timezone
 
 REPOSITORY = "orenvlad-ai/dcp-wbc-integration-lab"
 REPOSITORY_ID = 1340359100
-TARGET_SPEC = "dcp-wbc-integration-lab/v1"
-QUALIFICATION_CASES = {
-    "valid",
-    "head_drift",
-    "main_drift",
-    "wrong_identity",
-    "artifact_mismatch",
-    "probe_failure",
-}
+TARGET_SPEC = "dcp-wbc-integration-lab/v2"
+DCP_CASE = "dcp_canary"
+HANDOFF_CASE = "issuer_handoff"
 
 
 def now() -> str:
@@ -129,9 +123,9 @@ def validate(args: argparse.Namespace) -> None:
     manifest_path = pathlib.Path(args.manifest)
     evidence_path = pathlib.Path(args.evidence)
     manifest = json.loads(manifest_path.read_text())
-    qualification_case = manifest.get("qualification_case", "stage3_setup")
+    qualification_case = manifest.get("qualification_case", "")
     require(
-        qualification_case in QUALIFICATION_CASES or qualification_case == "stage3_setup",
+        qualification_case in {DCP_CASE, HANDOFF_CASE},
         evidence_path,
         "qualification_case",
         manifest,
@@ -162,19 +156,21 @@ def validate(args: argparse.Namespace) -> None:
         "manifest_digest",
         manifest,
     )
-    require(
-        manifest.get("issuer")
-        == {
+    expected_issuer = {
+        DCP_CASE: {
+            "actor": "orenvlad-ai",
+            "event": "repository_dispatch",
+            "kind": "dcp/v2",
+        },
+        HANDOFF_CASE: {
             "actor": "orenvlad-ai",
             "event": "workflow_dispatch",
-            "kind": "qualification/v1",
+            "kind": "qualification/handoff-v1",
         },
-        evidence_path,
-        "issuer",
-        manifest,
-    )
+    }[qualification_case]
+    require(manifest.get("issuer") == expected_issuer, evidence_path, "issuer", manifest)
     require(os.environ.get("GITHUB_ACTOR") == "orenvlad-ai", evidence_path, "actor", manifest)
-    require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch", evidence_path, "event", manifest)
+    require(os.environ.get("GITHUB_EVENT_NAME") == expected_issuer["event"], evidence_path, "event", manifest)
     require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY, evidence_path, "workflow_repository", manifest)
 
     repo = gh(f"repos/{REPOSITORY}")
@@ -190,6 +186,10 @@ def validate(args: argparse.Namespace) -> None:
     require(pr.get("state") == "open" and pr.get("draft") is False, evidence_path, "pr_state", manifest)
     require(pr["base"]["ref"] == "main", evidence_path, "pr_base", manifest)
     require(pr["head"]["repo"]["full_name"] == REPOSITORY, evidence_path, "head_repository", manifest)
+    require(manifest.get("head_repository") == REPOSITORY, evidence_path, "manifest_head_repository", manifest)
+    require(pr["head"]["ref"] == manifest.get("head_branch"), evidence_path, "head_branch", manifest)
+    expected_ref = "refs/heads/main" if qualification_case == DCP_CASE else f"refs/heads/{pr['head']['ref']}"
+    require(os.environ.get("GITHUB_REF") == expected_ref, evidence_path, "event_ref", manifest)
     if pr["head"]["sha"] != manifest.get("admitted_head"):
         stop(
             evidence_path,
@@ -202,8 +202,6 @@ def validate(args: argparse.Namespace) -> None:
                 "current_main": gh(f"repos/{REPOSITORY}/git/ref/heads/main")["object"]["sha"],
             },
         )
-    if qualification_case == "head_drift":
-        stop(evidence_path, "validation_failure", "expected_head_drift_not_observed", manifest)
     ref = gh(f"repos/{REPOSITORY}/git/ref/heads/main")
     if ref["object"]["sha"] != manifest.get("main_snapshot"):
         stop(
@@ -217,8 +215,6 @@ def validate(args: argparse.Namespace) -> None:
                 "current_head": pr["head"]["sha"],
             },
         )
-    if qualification_case == "main_drift":
-        stop(evidence_path, "validation_failure", "expected_main_drift_not_observed", manifest)
     require(pr.get("mergeable") is True and pr.get("mergeable_state") == "clean", evidence_path, "mergeability", manifest)
 
     checks = gh(f"repos/{REPOSITORY}/commits/{manifest['admitted_head']}/check-runs")
@@ -249,9 +245,6 @@ def validate(args: argparse.Namespace) -> None:
         if not node["isResolved"]
     ]
     require(not unresolved, evidence_path, "unresolved_threads", manifest)
-    if qualification_case == "wrong_identity":
-        stop(evidence_path, "validation_failure", "expected_wrong_identity_not_observed", manifest)
-
     append_output(
         pathlib.Path(args.github_output),
         manifest_digest=manifest["manifest_digest"],
@@ -340,6 +333,33 @@ def replay(args: argparse.Namespace) -> None:
         source_run_id=run_id,
     )
     print(f"equal duplicate reuses proof {prior_proof['proof_digest']}")
+
+
+def handoff(args: argparse.Namespace) -> None:
+    manifest = json.loads(pathlib.Path(args.manifest).read_text())
+    if manifest.get("qualification_case") != HANDOFF_CASE:
+        raise SystemExit("handoff evidence requires the exact handoff manifest")
+    write_evidence(
+        pathlib.Path(args.evidence),
+        "issuer_handoff",
+        "qualification_off_dcp_seam_disabled",
+        manifest,
+        phase="issuer_handoff",
+        observed={
+            "merge_sha": args.merge_sha,
+            "workflow_id": 338377713,
+            "workflow_state": "disabled_manually",
+            "qualification_issuer": "off",
+            "dcp_issuer": "disabled_pending_readback",
+        },
+        effects={
+            "ref_updates": 1,
+            "merges": 1,
+            "release_artifacts": 0,
+            "deploys": 0,
+            "terminal_proofs": 0,
+        },
+    )
 
 
 def failure(args: argparse.Namespace) -> None:
@@ -438,6 +458,11 @@ def main() -> None:
     replay_parser.add_argument("--output-dir", required=True)
     replay_parser.add_argument("--github-output", required=True)
     replay_parser.set_defaults(func=replay)
+    handoff_parser = sub.add_parser("handoff")
+    handoff_parser.add_argument("--manifest", required=True)
+    handoff_parser.add_argument("--evidence", required=True)
+    handoff_parser.add_argument("--merge-sha", required=True)
+    handoff_parser.set_defaults(func=handoff)
     failure_parser = sub.add_parser("failure")
     failure_parser.add_argument("--manifest", required=True)
     failure_parser.add_argument("--evidence", required=True)

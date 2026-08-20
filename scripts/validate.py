@@ -15,7 +15,8 @@ EXPECTED = {
     "service": "dcp-wbc-integration-lab",
     "listener": "127.0.0.1:18321",
     "deploy_root": "/opt/dcp-wbc-integration-lab",
-    "dcp_issuer": "off",
+    "qualification_issuer": "off",
+    "target_spec_version": "dcp-wbc-integration-lab/v2",
     "artifact_retention_days": 90,
 }
 
@@ -29,15 +30,19 @@ def main() -> None:
     for key, value in EXPECTED.items():
         if spec.get(key) != value:
             fail(f"target spec drift: {key}")
-    if spec.get("issuer") != {
+    dcp_issuer = {
         "actor": "orenvlad-ai",
-        "event": "workflow_dispatch",
-        "kind": "qualification/v1",
+        "event": "repository_dispatch",
+        "event_type": "dcp-admission-v2",
+        "kind": "dcp/v2",
+    }
+    if spec.get("dcp_issuer") != dcp_issuer or spec.get("issuer") != {
+        key: value for key, value in dcp_issuer.items() if key != "event_type"
     }:
-        fail("qualification issuer drift")
+        fail("DCP issuer drift")
     if spec.get("release_actor") != "github-actions[bot]":
         fail("release actor drift")
-    if spec.get("qualification_matrix") != {
+    if spec.get("qualification_history") != {
         "cases": [
             "valid",
             "head_drift",
@@ -68,12 +73,16 @@ def main() -> None:
             fail(f"forbidden Release Train token: {token}")
     for token in [
         "workflow_dispatch",
+        "repository_dispatch",
+        "dcp-admission-v2",
         "manifest_b64",
         "retention-days: 90",
         "detect equal terminal replay",
         "controlled artifact-digest mismatch",
         "controlled exact probe failure",
         "qualification-evidence-",
+        "issuer-handoff-",
+        "actions/workflows/338377713/disable",
     ]:
         if token not in workflow_lower:
             fail(f"missing Release Train token: {token}")
@@ -90,8 +99,17 @@ def main() -> None:
     ]:
         if token not in release_core:
             fail(f"missing qualification core boundary: {token}")
-    if "orenvlad-ai/wb-core" in release_core or "DCP_AO" in release_core:
-        fail("qualification core contains a foreign target or DCP authority")
+    for token in [
+        'TARGET_SPEC = "dcp-wbc-integration-lab/v2"',
+        'DCP_CASE = "dcp_canary"',
+        '"event": "repository_dispatch"',
+        '"kind": "dcp/v2"',
+        '"kind": "qualification/handoff-v1"',
+    ]:
+        if token not in release_core:
+            fail(f"missing DCP/handoff issuer boundary: {token}")
+    if "orenvlad-ai/wb-core" in release_core or "DCP_AO" in release_core or '"kind": "qualification/v1"' in release_core:
+        fail("release core contains a foreign target or retired qualification issuer")
 
     receiver = (ROOT / "deploy/dcp-wbc-lab-deploy").read_text()
     for token in [

@@ -19,7 +19,7 @@ SPEC.loader.exec_module(release_train)
 def base_manifest() -> dict:
     value = {
         "protocol": "dcp-release-manifest/v1",
-        "target_spec": "dcp-wbc-integration-lab/v1",
+        "target_spec": "dcp-wbc-integration-lab/v2",
         "repository": release_train.REPOSITORY,
         "repository_id": release_train.REPOSITORY_ID,
         "base": "main",
@@ -42,10 +42,10 @@ def base_manifest() -> dict:
         "service": "dcp-wbc-integration-lab",
         "issuer": {
             "actor": "orenvlad-ai",
-            "event": "workflow_dispatch",
-            "kind": "qualification/v1",
+            "event": "repository_dispatch",
+            "kind": "dcp/v2",
         },
-        "qualification_case": "valid",
+        "qualification_case": "dcp_canary",
         "dispatched_at": "2026-08-20T00:00:00+00:00",
     }
     value["manifest_digest"] = release_train.manifest_digest(value)
@@ -62,7 +62,6 @@ class ReleaseTrainTest(unittest.TestCase):
 
     def test_head_drift_is_one_zero_effect_readmission_fact(self) -> None:
         manifest = base_manifest()
-        manifest["qualification_case"] = "head_drift"
         manifest["manifest_digest"] = release_train.manifest_digest(manifest)
 
         def fake_gh(endpoint: str, *unused: str) -> object:
@@ -74,6 +73,7 @@ class ReleaseTrainTest(unittest.TestCase):
                     "draft": False,
                     "base": {"ref": "main"},
                     "head": {
+                        "ref": "codex/stage3-test",
                         "sha": "4" * 40,
                         "repo": {"full_name": release_train.REPOSITORY},
                     },
@@ -92,8 +92,9 @@ class ReleaseTrainTest(unittest.TestCase):
                 os.environ,
                 {
                     "GITHUB_ACTOR": "orenvlad-ai",
-                    "GITHUB_EVENT_NAME": "workflow_dispatch",
+                    "GITHUB_EVENT_NAME": "repository_dispatch",
                     "GITHUB_REPOSITORY": release_train.REPOSITORY,
+                    "GITHUB_REF": "refs/heads/main",
                     "GITHUB_RUN_ID": "10",
                     "GITHUB_RUN_ATTEMPT": "1",
                 },
@@ -116,7 +117,6 @@ class ReleaseTrainTest(unittest.TestCase):
 
     def test_wrong_repository_fails_before_provider_reads(self) -> None:
         manifest = base_manifest()
-        manifest["qualification_case"] = "wrong_identity"
         manifest["repository"] = "orenvlad-ai/foreign"
         manifest["manifest_digest"] = release_train.manifest_digest(manifest)
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -137,6 +137,32 @@ class ReleaseTrainTest(unittest.TestCase):
             evidence = json.loads(evidence_path.read_text())
             self.assertEqual(evidence["reason"], "manifest_repository")
             self.assertEqual(evidence["effects"]["ref_updates"], 0)
+
+    def test_retired_qualification_issuer_fails_before_provider_reads(self) -> None:
+        manifest = base_manifest()
+        manifest["issuer"] = {
+            "actor": "orenvlad-ai",
+            "event": "workflow_dispatch",
+            "kind": "qualification/v1",
+        }
+        manifest["manifest_digest"] = release_train.manifest_digest(manifest)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            evidence_path = root / "evidence.json"
+            manifest_path.write_text(json.dumps(manifest))
+            with mock.patch.object(release_train, "gh") as provider:
+                with self.assertRaises(SystemExit):
+                    release_train.validate(
+                        argparse.Namespace(
+                            manifest=str(manifest_path),
+                            evidence=str(evidence_path),
+                            github_output=str(root / "output"),
+                        )
+                    )
+            provider.assert_not_called()
+            evidence = json.loads(evidence_path.read_text())
+            self.assertEqual(evidence["reason"], "issuer")
 
     def test_missing_prior_proof_is_not_a_replay(self) -> None:
         manifest = base_manifest()
