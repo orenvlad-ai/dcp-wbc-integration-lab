@@ -157,6 +157,54 @@ class ReleaseTrainTest(unittest.TestCase):
                 )
             self.assertEqual(output_path.read_text(), "replayed=false\n")
 
+    def test_terminal_replay_accepts_github_absolute_path_layout(self) -> None:
+        manifest = base_manifest()
+        proof = {
+            "protocol": "dcp-deployment-proof/v1",
+            "admission_digest": manifest["manifest_digest"],
+            "merge_sha": "5" * 40,
+        }
+        proof["proof_digest"] = release_train.proof_digest(proof)
+
+        def fake_download(command: list[str], **unused: object) -> None:
+            out_dir = pathlib.Path(command[command.index("--dir") + 1])
+            nested = out_dir / "tmp"
+            nested.mkdir()
+            (nested / "manifest.json").write_text(json.dumps(manifest))
+            (nested / "deploy-proof.json").write_text(json.dumps(proof))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            output_path = root / "output"
+            out_dir = root / "proof"
+            manifest_path.write_text(json.dumps(manifest))
+            artifact = {
+                "expired": False,
+                "workflow_run": {"id": 123},
+            }
+            with mock.patch.object(
+                release_train,
+                "gh",
+                return_value={"total_count": 1, "artifacts": [artifact]},
+            ), mock.patch.object(
+                release_train.subprocess, "run", side_effect=fake_download
+            ):
+                release_train.replay(
+                    argparse.Namespace(
+                        manifest=str(manifest_path),
+                        output_dir=str(out_dir),
+                        github_output=str(output_path),
+                    )
+                )
+            output = output_path.read_text()
+            self.assertIn("replayed=true\n", output)
+            self.assertIn(f"proof_digest={proof['proof_digest']}\n", output)
+            replay = json.loads((out_dir / "replay-evidence.json").read_text())
+            self.assertEqual(replay["effects"]["merges"], 0)
+            self.assertEqual(replay["effects"]["deploys"], 0)
+            self.assertEqual(replay["effects"]["terminal_proofs_reused"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

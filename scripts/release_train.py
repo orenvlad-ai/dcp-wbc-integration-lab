@@ -52,6 +52,17 @@ def append_output(path: pathlib.Path, **values: object) -> None:
             handle.write(f"{key}={value}\n")
 
 
+def unique_artifact_file(root: pathlib.Path, name: str) -> pathlib.Path:
+    candidates = [
+        path
+        for path in root.rglob(name)
+        if path.is_file() and not path.is_symlink()
+    ]
+    if len(candidates) != 1:
+        raise SystemExit(f"terminal proof artifact has {len(candidates)} {name} files")
+    return candidates[0]
+
+
 def write_evidence(
     path: pathlib.Path,
     kind: str,
@@ -288,10 +299,8 @@ def replay(args: argparse.Namespace) -> None:
         ],
         check=True,
     )
-    prior_manifest_path = out_dir / "manifest.json"
-    prior_proof_path = out_dir / "deploy-proof.json"
-    if not prior_manifest_path.is_file() or not prior_proof_path.is_file():
-        raise SystemExit("terminal proof artifact is incomplete")
+    prior_manifest_path = unique_artifact_file(out_dir, "manifest.json")
+    prior_proof_path = unique_artifact_file(out_dir, "deploy-proof.json")
     prior_manifest = json.loads(prior_manifest_path.read_text())
     prior_proof = json.loads(prior_proof_path.read_text())
     if prior_manifest != manifest:
