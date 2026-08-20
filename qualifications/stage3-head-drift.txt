@@ -3,3 +3,6 @@ Stage 3 PR/head-drift inert fixture, revision one.
 The qualification issuer will freeze this exact head before a second inert
 commit proves that the Release Train rejects stale head identity without a ref,
 merge or deployment effect.
+
+Revision two: this bounded inert line intentionally makes the already-issued
+exact-head manifest stale.
