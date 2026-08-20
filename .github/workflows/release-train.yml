@@ -1,0 +1,149 @@
+name: Release Train
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_b64:
+        description: Exact qualification admission manifest (base64 JSON)
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dcp-wbc-integration-lab-main-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    environment: dcp-wbc-integration-lab-selectel
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decode exact manifest
+        env:
+          MANIFEST_B64: ${{ inputs.manifest_b64 }}
+        run: |
+          printf '%s' "$MANIFEST_B64" | base64 --decode > /tmp/manifest.json
+          test -s /tmp/manifest.json
+      - name: Validate manifest and current provider facts
+        id: validate
+        run: |
+          python3 scripts/release_train.py validate \
+            --manifest /tmp/manifest.json \
+            --evidence /tmp/release-evidence.json \
+            --github-output "$GITHUB_OUTPUT"
+          printf 'VALIDATED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - name: Merge exact admitted head
+        id: merge
+        env:
+          PR_NUMBER: ${{ steps.validate.outputs.pr_number }}
+          ADMITTED_HEAD: ${{ steps.validate.outputs.admitted_head }}
+        run: |
+          response=$(gh api --method PUT "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/merge" \
+            -f merge_method=squash -f sha="$ADMITTED_HEAD")
+          test "$(printf '%s' "$response" | jq -r .merged)" = true
+          merge_sha=$(printf '%s' "$response" | jq -r .sha)
+          test "${#merge_sha}" = 40
+          printf 'merge_sha=%s\n' "$merge_sha" >> "$GITHUB_OUTPUT"
+          printf 'MERGE_SHA=%s\nMERGED_AT=%s\n' "$merge_sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - name: Checkout exact merge
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$MERGE_SHA"
+          git checkout --detach "$MERGE_SHA"
+          test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build immutable artifact
+        id: artifact
+        run: |
+          mkdir -p dist/root
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildSHA=$MERGE_SHA" \
+            -o dist/root/dcp-wbc-integration-lab ./cmd/server
+          test "$(dist/root/dcp-wbc-integration-lab --build-sha)" = "$MERGE_SHA"
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -czf dist/dcp-wbc-integration-lab.tar.gz -C dist/root dcp-wbc-integration-lab
+          artifact_sha=$(sha256sum dist/dcp-wbc-integration-lab.tar.gz | cut -d' ' -f1)
+          artifact_size=$(wc -c < dist/dcp-wbc-integration-lab.tar.gz | tr -d ' ')
+          printf 'artifact_sha=%s\nartifact_size=%s\n' "$artifact_sha" "$artifact_size" >> "$GITHUB_OUTPUT"
+          printf 'ARTIFACT_SHA=%s\nBUILT_AT=%s\n' "$artifact_sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - name: Configure bounded deployment credential
+        env:
+          DEPLOY_KEY: ${{ secrets.DCP_WBC_LAB_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DCP_WBC_LAB_KNOWN_HOSTS }}
+        run: |
+          set +x
+          install -d -m 0700 "$RUNNER_TEMP/dcp-wbc-lab-ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/dcp-wbc-lab-ssh/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts"
+          chmod 0600 "$RUNNER_TEMP/dcp-wbc-lab-ssh/key" "$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts"
+      - name: Install and start persistent service
+        env:
+          MANIFEST_SHA: ${{ steps.validate.outputs.manifest_digest }}
+          ARTIFACT_SIZE: ${{ steps.artifact.outputs.artifact_size }}
+          DEPLOY_HOST: ${{ vars.DCP_WBC_LAB_HOST }}
+          DEPLOY_USER: ${{ vars.DCP_WBC_LAB_USER }}
+        run: |
+          {
+            printf 'DCP_WBC_LAB_DEPLOY_V1\n%s\n%s\n%s\n%s\n' \
+              "$MERGE_SHA" "$ARTIFACT_SHA" "$MANIFEST_SHA" "$ARTIFACT_SIZE"
+            command cat dist/dcp-wbc-integration-lab.tar.gz
+          } | ssh -T -i "$RUNNER_TEMP/dcp-wbc-lab-ssh/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" | tee /tmp/deploy-receipt.txt
+          grep -Fqx "DEPLOYED|$MERGE_SHA|$ARTIFACT_SHA|$MANIFEST_SHA|dcp-wbc-integration-lab-selectel|dcp-wbc-integration-lab" /tmp/deploy-receipt.txt
+          printf 'INSTALLED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - name: Post-job deployed-SHA health and provenance readback
+        env:
+          MANIFEST_SHA: ${{ steps.validate.outputs.manifest_digest }}
+          DEPLOY_HOST: ${{ vars.DCP_WBC_LAB_HOST }}
+          DEPLOY_USER: ${{ vars.DCP_WBC_LAB_USER }}
+        run: |
+          printf 'DCP_WBC_LAB_PROBE_V1\n%s\n%s\n%s\n' "$MERGE_SHA" "$ARTIFACT_SHA" "$MANIFEST_SHA" \
+            | ssh -T -i "$RUNNER_TEMP/dcp-wbc-lab-ssh/key" \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" | tee /tmp/probe-receipt.txt
+          grep -Fqx "PROBE_OK|$MERGE_SHA|$ARTIFACT_SHA|$MANIFEST_SHA|dcp-wbc-integration-lab-selectel|dcp-wbc-integration-lab" /tmp/probe-receipt.txt
+          printf 'PROBED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - name: Create immutable deployment proof
+        run: |
+          python3 scripts/release_train.py proof \
+            --manifest /tmp/manifest.json \
+            --probe-receipt /tmp/probe-receipt.txt \
+            --output /tmp/deploy-proof.json
+          test "$(jq -r .merge_sha /tmp/deploy-proof.json)" = "$MERGE_SHA"
+          test "$(jq -r .artifact_digest /tmp/deploy-proof.json)" = "$ARTIFACT_SHA"
+          test "$(jq -r .deployed_sha /tmp/deploy-proof.json)" = "$MERGE_SHA"
+      - name: Publish immutable proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-proof-${{ steps.validate.outputs.manifest_digest }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            /tmp/manifest.json
+            /tmp/deploy-proof.json
+            /tmp/deploy-receipt.txt
+            /tmp/probe-receipt.txt
+            dist/dcp-wbc-integration-lab.tar.gz
+      - name: Publish fail-closed evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: ignore
+          path: /tmp/release-evidence.json

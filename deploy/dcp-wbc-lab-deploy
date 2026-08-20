@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+root=/opt/dcp-wbc-integration-lab
+service=dcp-wbc-integration-lab.service
+repository=orenvlad-ai/dcp-wbc-integration-lab
+environment=dcp-wbc-integration-lab-selectel
+service_id=dcp-wbc-integration-lab
+listener=http://127.0.0.1:18321
+stage=
+
+fail() {
+	printf 'DEPLOY_REJECTED|%s\n' "$1"
+	exit 1
+}
+
+cleanup_stage() {
+	if [ -n "$stage" ] && [ -d "$stage" ] && [ ! -L "$stage" ]; then
+		case "$stage" in
+			"$root"/releases/.incoming.??????) rm -rf -- "$stage" ;;
+		esac
+	fi
+}
+
+validate_release_path() {
+	local candidate=$1 name
+	case "$candidate" in
+		"$root"/releases/*) ;;
+		*) fail release_path ;;
+	esac
+	name=${candidate#"$root/releases/"}
+	[[ "$name" =~ ^[0-9a-f]{40}-[0-9a-f]{64}$ ]] || fail release_name
+	[ -d "$candidate" ] && [ ! -L "$candidate" ] || fail release_shape
+}
+
+retire_release() {
+	local candidate=$1
+	validate_release_path "$candidate"
+	rm -rf -- "$candidate"
+}
+
+validate_release_set() {
+	local candidate count=0
+	while IFS= read -r -d '' candidate; do
+		validate_release_path "$candidate"
+		count=$((count + 1))
+	done < <(find "$root/releases" -mindepth 1 -maxdepth 1 ! -name '.incoming.*' -print0)
+	(( count <= 2 )) || fail release_retention
+}
+
+trap cleanup_stage EXIT
+
+[ "$(id -un)" = dcp-wbc-lab ] || fail account
+[ -z "${SSH_ORIGINAL_COMMAND:-}" ] || fail original_command
+[ -d "$root/releases" ] || fail root
+validate_release_set
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
+IFS= read -r protocol || fail protocol
+case "$protocol" in
+	DCP_WBC_LAB_DEPLOY_V1)
+		IFS= read -r merge_sha || fail merge_sha
+		IFS= read -r artifact_sha || fail artifact_sha
+		IFS= read -r manifest_sha || fail manifest_sha
+		IFS= read -r artifact_size || fail artifact_size
+		[[ "$merge_sha" =~ ^[0-9a-f]{40}$ ]] || fail merge_sha
+		[[ "$artifact_sha" =~ ^[0-9a-f]{64}$ ]] || fail artifact_sha
+		[[ "$manifest_sha" =~ ^[0-9a-f]{64}$ ]] || fail manifest_sha
+		[[ "$artifact_size" =~ ^[0-9]+$ ]] || fail artifact_size
+		(( artifact_size > 0 && artifact_size <= 16777216 )) || fail artifact_size
+
+		stage=$(mktemp -d "$root/releases/.incoming.XXXXXX")
+		archive="$stage/artifact.tar.gz"
+		dd iflag=fullblock bs=1 count="$artifact_size" of="$archive" status=none
+		[ "$(wc -c <"$archive" | tr -d ' ')" = "$artifact_size" ] || fail truncated
+		[ "$(sha256sum "$archive" | cut -d' ' -f1)" = "$artifact_sha" ] || fail artifact_digest
+		[ "$(tar -tzf "$archive")" = dcp-wbc-integration-lab ] || fail archive_shape
+		tar -xzf "$archive" -C "$stage" --no-same-owner --no-same-permissions
+		binary="$stage/dcp-wbc-integration-lab"
+		[ -f "$binary" ] && [ ! -L "$binary" ] || fail binary
+		chmod 0555 "$binary"
+		[ "$($binary --build-sha)" = "$merge_sha" ] || fail embedded_sha
+		printf 'DCP_LAB_ARTIFACT_SHA256=%s\nDCP_LAB_MANIFEST_SHA256=%s\n' \
+			"$artifact_sha" "$manifest_sha" >"$stage/deploy.env"
+		chmod 0444 "$stage/deploy.env"
+
+		release="$root/releases/$merge_sha-$artifact_sha"
+		if [ -e "$release" ]; then
+			[ -d "$release" ] && [ ! -L "$release" ] || fail replay_shape
+			[ "$("$release/dcp-wbc-integration-lab" --build-sha)" = "$merge_sha" ] || fail replay_sha
+			[ "$(sha256sum "$release/artifact.tar.gz" | cut -d' ' -f1)" = "$artifact_sha" ] || fail replay_artifact
+		else
+			mv "$stage" "$release"
+			stage=
+		fi
+
+		old_current=$(readlink "$root/current" 2>/dev/null || true)
+		old_previous=$(readlink "$root/previous" 2>/dev/null || true)
+		if [ "$old_current" != "$release" ]; then
+			if [ -n "$old_current" ]; then
+				ln -s "$old_current" "$root/previous.next"
+				mv -Tf "$root/previous.next" "$root/previous"
+			fi
+			ln -s "$release" "$root/current.next"
+			mv -Tf "$root/current.next" "$root/current"
+		fi
+
+		rollback_activation() {
+			systemctl --user stop "$service" || true
+			if [ -n "$old_current" ]; then
+				ln -s "$old_current" "$root/current.rollback"
+				mv -Tf "$root/current.rollback" "$root/current"
+				systemctl --user restart "$service" || true
+			else
+				rm -f -- "$root/current"
+			fi
+			if [ -n "$old_previous" ]; then
+				ln -s "$old_previous" "$root/previous.rollback"
+				mv -Tf "$root/previous.rollback" "$root/previous"
+			else
+				rm -f -- "$root/previous"
+			fi
+			if [ "$release" != "$old_current" ] && [ "$release" != "$old_previous" ]; then
+				retire_release "$release"
+			fi
+		}
+		reject_activation() {
+			local reason=$1
+			rollback_activation
+			fail "$reason"
+		}
+
+		systemctl --user restart "$service" || reject_activation service_restart
+		ready=false
+		for n in 1 2 3 4 5 6 7 8 9 10; do
+			if curl --silent --fail --max-time 2 "$listener/healthz" >/dev/null; then ready=true; break; fi
+			sleep 1
+		done
+		[ "$ready" = true ] || reject_activation health_timeout
+		health=$(curl --silent --fail --max-time 2 "$listener/healthz") || reject_activation health
+		provenance=$(curl --silent --fail --max-time 2 "$listener/provenance") || reject_activation provenance
+		[ "$health" = '{"status":"ok"}' ] || reject_activation health_body
+		printf '%s' "$provenance" | grep -Fq "\"repository\":\"$repository\"" || reject_activation repository
+		printf '%s' "$provenance" | grep -Fq "\"deployed_sha\":\"$merge_sha\"" || reject_activation deployed_sha
+		printf '%s' "$provenance" | grep -Fq "\"artifact_digest\":\"$artifact_sha\"" || reject_activation provenance_artifact
+		printf '%s' "$provenance" | grep -Fq "\"manifest_digest\":\"$manifest_sha\"" || reject_activation provenance_manifest
+		printf '%s' "$provenance" | grep -Fq "\"environment\":\"$environment\"" || reject_activation environment
+		printf '%s' "$provenance" | grep -Fq "\"service\":\"$service_id\"" || reject_activation service
+		if [ -n "$old_previous" ] && [ "$old_previous" != "$old_current" ] && [ "$old_previous" != "$release" ]; then
+			retire_release "$old_previous"
+		fi
+		validate_release_set
+		printf 'DEPLOYED|%s|%s|%s|%s|%s\n' "$merge_sha" "$artifact_sha" "$manifest_sha" "$environment" "$service_id"
+		;;
+	DCP_WBC_LAB_PROBE_V1)
+		IFS= read -r merge_sha || fail merge_sha
+		IFS= read -r artifact_sha || fail artifact_sha
+		IFS= read -r manifest_sha || fail manifest_sha
+		[[ "$merge_sha" =~ ^[0-9a-f]{40}$ ]] || fail merge_sha
+		[[ "$artifact_sha" =~ ^[0-9a-f]{64}$ ]] || fail artifact_sha
+		[[ "$manifest_sha" =~ ^[0-9a-f]{64}$ ]] || fail manifest_sha
+		health=$(curl --silent --fail --max-time 2 "$listener/healthz") || fail health
+		provenance=$(curl --silent --fail --max-time 2 "$listener/provenance") || fail provenance
+		[ "$health" = '{"status":"ok"}' ] || fail health_body
+		printf '%s' "$provenance" | grep -Fq "\"deployed_sha\":\"$merge_sha\"" || fail deployed_sha
+		printf '%s' "$provenance" | grep -Fq "\"artifact_digest\":\"$artifact_sha\"" || fail artifact
+		printf '%s' "$provenance" | grep -Fq "\"manifest_digest\":\"$manifest_sha\"" || fail manifest
+		printf 'PROBE_OK|%s|%s|%s|%s|%s\n' "$merge_sha" "$artifact_sha" "$manifest_sha" "$environment" "$service_id"
+		;;
+	*) fail protocol ;;
+esac

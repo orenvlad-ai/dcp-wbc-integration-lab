@@ -1,0 +1,27 @@
+{
+  "adapter": "selectel-systemd/v1",
+  "artifact_retention_days": 90,
+  "base": "main",
+  "dcp_issuer": "off",
+  "deploy_root": "/opt/dcp-wbc-integration-lab",
+  "environment": "dcp-wbc-integration-lab-selectel",
+  "issuer": {
+    "actor": "orenvlad-ai",
+    "event": "workflow_dispatch",
+    "kind": "qualification/v1"
+  },
+  "listener": "127.0.0.1:18321",
+  "release_actor": "github-actions[bot]",
+  "repository": "orenvlad-ai/dcp-wbc-integration-lab",
+  "repository_id": 1340359100,
+  "required_check": "baseline",
+  "resource_limits": {
+    "cpu_quota_percent": 50,
+    "memory_max_bytes": 536870912,
+    "open_files_max": 1024,
+    "releases_max": 2,
+    "tasks_max": 64
+  },
+  "service": "dcp-wbc-integration-lab",
+  "target_spec_version": "dcp-wbc-integration-lab/v1"
+}
