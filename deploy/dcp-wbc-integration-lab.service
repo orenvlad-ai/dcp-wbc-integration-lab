@@ -15,6 +15,7 @@ PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
+InaccessiblePaths=/opt/luchiki-landing /opt/wb-core-runtime /opt/wb-ai /opt/wb-ai-repo /opt/wb-web-bot
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes

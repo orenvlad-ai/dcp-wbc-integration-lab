@@ -32,6 +32,16 @@ func TestHealthAndProvenance(t *testing.T) {
 		}
 	}
 
+	health := httptest.NewRecorder()
+	h.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	var healthBody map[string]string
+	if err := json.Unmarshal(health.Body.Bytes(), &healthBody); err != nil {
+		t.Fatal(err)
+	}
+	if healthBody["status"] != "ok" || healthBody["service"] != service {
+		t.Fatalf("health = %#v", healthBody)
+	}
+
 	res := httptest.NewRecorder()
 	h.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/provenance", nil))
 	var got provenance

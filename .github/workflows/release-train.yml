@@ -65,6 +65,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
       - name: Build immutable artifact
         id: artifact
         run: |
@@ -72,8 +73,9 @@ jobs:
           CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildSHA=$MERGE_SHA" \
             -o dist/root/dcp-wbc-integration-lab ./cmd/server
           test "$(dist/root/dcp-wbc-integration-lab --build-sha)" = "$MERGE_SHA"
+          printf '%s\n' "$MERGE_SHA" > dist/root/build.sha
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-            -czf dist/dcp-wbc-integration-lab.tar.gz -C dist/root dcp-wbc-integration-lab
+            -czf dist/dcp-wbc-integration-lab.tar.gz -C dist/root build.sha dcp-wbc-integration-lab
           artifact_sha=$(sha256sum dist/dcp-wbc-integration-lab.tar.gz | cut -d' ' -f1)
           artifact_size=$(wc -c < dist/dcp-wbc-integration-lab.tar.gz | tr -d ' ')
           printf 'artifact_sha=%s\nartifact_size=%s\n' "$artifact_sha" "$artifact_size" >> "$GITHUB_OUTPUT"
