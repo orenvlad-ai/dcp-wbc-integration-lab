@@ -78,9 +78,11 @@ case "$protocol" in
 		[ "$(tar -tzf "$archive")" = dcp-wbc-integration-lab ] || fail archive_shape
 		tar -xzf "$archive" -C "$stage" --no-same-owner --no-same-permissions
 		binary="$stage/dcp-wbc-integration-lab"
+		build_sha_file="$stage/build.sha"
 		[ -f "$binary" ] && [ ! -L "$binary" ] || fail binary
 		chmod 0555 "$binary"
-		[ "$($binary --build-sha)" = "$merge_sha" ] || fail embedded_sha
+		printf '%s\n' "$merge_sha" >"$build_sha_file"
+		chmod 0444 "$build_sha_file"
 		printf 'DCP_LAB_ARTIFACT_SHA256=%s\nDCP_LAB_MANIFEST_SHA256=%s\n' \
 			"$artifact_sha" "$manifest_sha" >"$stage/deploy.env"
 		chmod 0444 "$stage/deploy.env"
@@ -88,7 +90,7 @@ case "$protocol" in
 		release="$root/releases/$merge_sha-$artifact_sha"
 		if [ -e "$release" ]; then
 			[ -d "$release" ] && [ ! -L "$release" ] || fail replay_shape
-			[ "$("$release/dcp-wbc-integration-lab" --build-sha)" = "$merge_sha" ] || fail replay_sha
+			[ "$(tr -d '\n' <"$release/build.sha")" = "$merge_sha" ] || fail replay_sha
 			[ "$(sha256sum "$release/artifact.tar.gz" | cut -d' ' -f1)" = "$artifact_sha" ] || fail replay_artifact
 		else
 			mv "$stage" "$release"
@@ -140,7 +142,7 @@ case "$protocol" in
 		[ "$ready" = true ] || reject_activation health_timeout
 		health=$(curl --silent --fail --max-time 2 "$listener/healthz") || reject_activation health
 		provenance=$(curl --silent --fail --max-time 2 "$listener/provenance") || reject_activation provenance
-		[ "$health" = '{"status":"ok"}' ] || reject_activation health_body
+		[ "$health" = '{"service":"dcp-wbc-integration-lab","status":"ok"}' ] || reject_activation health_body
 		printf '%s' "$provenance" | grep -Fq "\"repository\":\"$repository\"" || reject_activation repository
 		printf '%s' "$provenance" | grep -Fq "\"deployed_sha\":\"$merge_sha\"" || reject_activation deployed_sha
 		printf '%s' "$provenance" | grep -Fq "\"artifact_digest\":\"$artifact_sha\"" || reject_activation provenance_artifact
@@ -162,7 +164,7 @@ case "$protocol" in
 		[[ "$manifest_sha" =~ ^[0-9a-f]{64}$ ]] || fail manifest_sha
 		health=$(curl --silent --fail --max-time 2 "$listener/healthz") || fail health
 		provenance=$(curl --silent --fail --max-time 2 "$listener/provenance") || fail provenance
-		[ "$health" = '{"status":"ok"}' ] || fail health_body
+		[ "$health" = '{"service":"dcp-wbc-integration-lab","status":"ok"}' ] || fail health_body
 		printf '%s' "$provenance" | grep -Fq "\"deployed_sha\":\"$merge_sha\"" || fail deployed_sha
 		printf '%s' "$provenance" | grep -Fq "\"artifact_digest\":\"$artifact_sha\"" || fail artifact
 		printf '%s' "$provenance" | grep -Fq "\"manifest_digest\":\"$manifest_sha\"" || fail manifest

@@ -60,6 +60,7 @@ def main() -> None:
         "DCP_WBC_LAB_DEPLOY_V1",
         "DCP_WBC_LAB_PROBE_V1",
         "127.0.0.1:18321",
+        "build.sha",
         "service=dcp-wbc-integration-lab.service",
         'systemctl --user restart "$service"',
     ]:
@@ -76,6 +77,7 @@ def main() -> None:
         "LimitNOFILE=1024",
         "IPAddressDeny=any",
         "IPAddressAllow=localhost",
+        "InaccessiblePaths=/opt/luchiki-landing /opt/wb-core-runtime /opt/wb-ai /opt/wb-ai-repo /opt/wb-web-bot",
     ]:
         if token not in service:
             fail(f"missing service boundary: {token}")
