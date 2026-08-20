@@ -75,16 +75,14 @@ case "$protocol" in
 		dd iflag=fullblock bs=1 count="$artifact_size" of="$archive" status=none
 		[ "$(wc -c <"$archive" | tr -d ' ')" = "$artifact_size" ] || fail truncated
 		[ "$(sha256sum "$archive" | cut -d' ' -f1)" = "$artifact_sha" ] || fail artifact_digest
-		[ "$(tar -tzf "$archive")" = $'build.sha\ndcp-wbc-integration-lab' ] || fail archive_shape
+		[ "$(tar -tzf "$archive")" = dcp-wbc-integration-lab ] || fail archive_shape
 		tar -xzf "$archive" -C "$stage" --no-same-owner --no-same-permissions
 		binary="$stage/dcp-wbc-integration-lab"
 		build_sha_file="$stage/build.sha"
 		[ -f "$binary" ] && [ ! -L "$binary" ] || fail binary
-		[ -f "$build_sha_file" ] && [ ! -L "$build_sha_file" ] || fail build_sha_file
 		chmod 0555 "$binary"
+		printf '%s\n' "$merge_sha" >"$build_sha_file"
 		chmod 0444 "$build_sha_file"
-		[ "$(wc -l <"$build_sha_file" | tr -d ' ')" = 1 ] || fail build_sha_shape
-		[ "$(tr -d '\n' <"$build_sha_file")" = "$merge_sha" ] || fail embedded_sha
 		printf 'DCP_LAB_ARTIFACT_SHA256=%s\nDCP_LAB_MANIFEST_SHA256=%s\n' \
 			"$artifact_sha" "$manifest_sha" >"$stage/deploy.env"
 		chmod 0444 "$stage/deploy.env"

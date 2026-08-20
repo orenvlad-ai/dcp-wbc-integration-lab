@@ -34,8 +34,8 @@ branch. Base or head drift produces immutable `readmission_required` evidence.
 
 The forced deploy credential accepts only the versioned deploy/probe protocol.
 It cannot select a command or path. The shipped binary is never executed by
-the SSH receiver: exact build identity is read as data and execution occurs
-only in the hardened systemd unit. That unit makes the protected
+the SSH receiver: validated manifest merge identity is stored as data and
+execution occurs only in the hardened systemd unit. That unit makes the protected
 `/opt/luchiki-landing` co-tenant and all retired legacy-WBC roots inaccessible.
 The service has no business data, WBC secret, DCP authority or production
 route.
