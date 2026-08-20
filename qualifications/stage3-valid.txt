@@ -1,0 +1,5 @@
+Stage 3 valid exact-manifest inert fixture.
+
+This file has no runtime behavior. Its reviewed exact head exists only to
+exercise one real protected Release Train merge, immutable artifact, persistent
+install and terminal deployment proof.
