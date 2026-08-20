@@ -1,0 +1,5 @@
+Stage 3 bounded negative inert fixture.
+
+One reviewed exact head supports the wrong identity, artifact mismatch and
+probe failure cases while main is unchanged, then the main-drift case after the
+separate valid fixture advances main. This file has no runtime behavior.
