@@ -10,7 +10,7 @@ behavior, business data, production route or DCP runtime integration.
 
 The initial `main` commit is the sole owner-authorized empty-repository
 bootstrap exception. It exists only to establish the baseline workflow, target
-spec, inert target, qualification-only issuer, mechanical Release Train,
+spec, inert target, historical qualification issuer, mechanical Release Train,
 deploy adapter, tests and repository instructions needed for ordinary pull
 requests. Every substantive successor uses an ordinary ready PR, exact-head
 `baseline`, a real context-free semantic/security review and the repository-
@@ -19,8 +19,12 @@ owned Release Train.
 Authority: `orenvlad-ai/dev-control-plane` PR #245, merged at
 `86dfdb0f66889494219da7fc60351c5cee38660d`.
 
-The only active issuer in Stage 2/3 is `qualification/v1`, pinned to actor
-`orenvlad-ai`. The DCP issuer is absent. Both issuers are never active together.
+Stage 2/3 used only `qualification/v1`, pinned to actor `orenvlad-ai`; those
+artifacts remain immutable history. Stage 5 retires that issuer and activates
+only `dcp/v2` / `repository_dispatch` / `dcp-admission-v2` for exact target spec
+`dcp-wbc-integration-lab/v2`. A one-time exact-head handoff run merges the seam
+without deploy and disables the workflow before the DCP enable readback, so
+both issuers are never active together.
 
 ## Target
 

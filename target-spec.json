@@ -2,16 +2,21 @@
   "adapter": "selectel-systemd/v1",
   "artifact_retention_days": 90,
   "base": "main",
-  "dcp_issuer": "off",
+  "dcp_issuer": {
+    "actor": "orenvlad-ai",
+    "event": "repository_dispatch",
+    "event_type": "dcp-admission-v2",
+    "kind": "dcp/v2"
+  },
   "deploy_root": "/opt/dcp-wbc-integration-lab",
   "environment": "dcp-wbc-integration-lab-selectel",
   "issuer": {
     "actor": "orenvlad-ai",
-    "event": "workflow_dispatch",
-    "kind": "qualification/v1"
+    "event": "repository_dispatch",
+    "kind": "dcp/v2"
   },
   "listener": "127.0.0.1:18321",
-  "qualification_matrix": {
+  "qualification_history": {
     "cases": [
       "valid",
       "head_drift",
@@ -24,6 +29,7 @@
     "idempotency": "equal-manifest-reuses-terminal-proof/v1",
     "negative_effects": "no-ref-or-deploy/v1"
   },
+  "qualification_issuer": "off",
   "release_actor": "github-actions[bot]",
   "repository": "orenvlad-ai/dcp-wbc-integration-lab",
   "repository_id": 1340359100,
@@ -36,5 +42,5 @@
     "tasks_max": 64
   },
   "service": "dcp-wbc-integration-lab",
-  "target_spec_version": "dcp-wbc-integration-lab/v1"
+  "target_spec_version": "dcp-wbc-integration-lab/v2"
 }
