@@ -37,6 +37,20 @@ def main() -> None:
         fail("qualification issuer drift")
     if spec.get("release_actor") != "github-actions[bot]":
         fail("release actor drift")
+    if spec.get("qualification_matrix") != {
+        "cases": [
+            "valid",
+            "head_drift",
+            "main_drift",
+            "wrong_identity",
+            "duplicate_manifest_event",
+            "artifact_mismatch",
+            "probe_failure",
+        ],
+        "idempotency": "equal-manifest-reuses-terminal-proof/v1",
+        "negative_effects": "no-ref-or-deploy/v1",
+    }:
+        fail("qualification matrix drift")
     if spec.get("resource_limits") != {
         "cpu_quota_percent": 50,
         "memory_max_bytes": 536870912,
@@ -47,13 +61,37 @@ def main() -> None:
         fail("resource limits drift")
 
     workflow = (ROOT / ".github/workflows/release-train.yml").read_text()
+    workflow_lower = workflow.lower()
     forbidden = ["git rebase", "update-branch", "--force", "force-with-lease", "retry"]
     for token in forbidden:
-        if token in workflow.lower():
+        if token in workflow_lower:
             fail(f"forbidden Release Train token: {token}")
-    for token in ["workflow_dispatch", "manifest_b64", "retention-days: 90"]:
-        if token not in workflow:
+    for token in [
+        "workflow_dispatch",
+        "manifest_b64",
+        "retention-days: 90",
+        "detect equal terminal replay",
+        "controlled artifact-digest mismatch",
+        "controlled exact probe failure",
+        "qualification-evidence-",
+    ]:
+        if token not in workflow_lower:
             fail(f"missing Release Train token: {token}")
+
+    release_core = (ROOT / "scripts/release_train.py").read_text()
+    for token in [
+        '"readmission_required"',
+        '"equal_duplicate"',
+        '"deployment_failure"',
+        '"ref_updates": 0',
+        '"release_artifacts": 0',
+        '"deploys": 0',
+        "conflicting terminal proof artifacts",
+    ]:
+        if token not in release_core:
+            fail(f"missing qualification core boundary: {token}")
+    if "orenvlad-ai/wb-core" in release_core or "DCP_AO" in release_core:
+        fail("qualification core contains a foreign target or DCP authority")
 
     receiver = (ROOT / "deploy/dcp-wbc-lab-deploy").read_text()
     for token in [

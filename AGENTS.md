@@ -13,5 +13,9 @@ This repository is an inert qualification target, not WBC or DCP runtime.
 - Merge is nonterminal until artifact/source/deployed SHA, environment,
   service, probes, actor/run/timestamps and proof digest agree.
 - The persistent service is loopback-only and contains no secret or data.
+- Stage 3 negative fixtures are fixed by `target-spec.json`; they publish
+  typed immutable evidence, make at most one bounded adapter call and preserve
+  the last proven deployment. Equal replay reuses one terminal proof and must
+  create no second merge or deploy.
 - Never print deployment credentials. Technical completion is not owner
   acceptance.

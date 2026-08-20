@@ -35,7 +35,23 @@ jobs:
         run: |
           printf '%s' "$MANIFEST_B64" | base64 --decode > /tmp/manifest.json
           test -s /tmp/manifest.json
+      - name: Detect equal terminal replay
+        id: replay
+        run: |
+          python3 scripts/release_train.py replay \
+            --manifest /tmp/manifest.json \
+            --output-dir /tmp/replayed-proof \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Publish equal replay evidence
+        if: steps.replay.outputs.replayed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-proof-${{ steps.replay.outputs.manifest_digest }}-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          path: /tmp/replayed-proof
       - name: Validate manifest and current provider facts
+        if: steps.replay.outputs.replayed != 'true'
         id: validate
         run: |
           python3 scripts/release_train.py validate \
@@ -43,7 +59,77 @@ jobs:
             --evidence /tmp/release-evidence.json \
             --github-output "$GITHUB_OUTPUT"
           printf 'VALIDATED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - name: Configure bounded deployment credential
+        if: steps.replay.outputs.replayed != 'true' && (steps.validate.outputs.qualification_case == 'valid' || steps.validate.outputs.qualification_case == 'stage3_setup' || steps.validate.outputs.qualification_case == 'artifact_mismatch' || steps.validate.outputs.qualification_case == 'probe_failure')
+        env:
+          DEPLOY_KEY: ${{ secrets.DCP_WBC_LAB_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DCP_WBC_LAB_KNOWN_HOSTS }}
+        run: |
+          set +x
+          install -d -m 0700 "$RUNNER_TEMP/dcp-wbc-lab-ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/dcp-wbc-lab-ssh/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts"
+          chmod 0600 "$RUNNER_TEMP/dcp-wbc-lab-ssh/key" "$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts"
+      - name: Controlled artifact-digest mismatch
+        if: steps.validate.outputs.qualification_case == 'artifact_mismatch'
+        env:
+          DEPLOY_HOST: ${{ vars.DCP_WBC_LAB_HOST }}
+          DEPLOY_USER: ${{ vars.DCP_WBC_LAB_USER }}
+        run: |
+          mkdir -p /tmp/mismatch/root
+          printf 'bounded qualification fixture\n' > /tmp/mismatch/root/dcp-wbc-integration-lab
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -czf /tmp/mismatch/artifact.tar.gz -C /tmp/mismatch/root dcp-wbc-integration-lab
+          artifact_size=$(wc -c < /tmp/mismatch/artifact.tar.gz | tr -d ' ')
+          artifact_sha=$(sha256sum /tmp/mismatch/artifact.tar.gz | cut -d' ' -f1)
+          bad_sha=0000000000000000000000000000000000000000000000000000000000000000
+          test "$artifact_sha" != "$bad_sha"
+          set +e
+          {
+            printf 'DCP_WBC_LAB_DEPLOY_V1\n%s\n%s\n%s\n%s\n' \
+              "${{ steps.validate.outputs.admitted_head }}" "$bad_sha" \
+              "${{ steps.validate.outputs.manifest_digest }}" "$artifact_size"
+            command cat /tmp/mismatch/artifact.tar.gz
+          } | ssh -T -i "$RUNNER_TEMP/dcp-wbc-lab-ssh/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" > /tmp/controlled-failure-receipt.txt 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -Fqx 'DEPLOY_REJECTED|artifact_digest' /tmp/controlled-failure-receipt.txt
+          python3 scripts/release_train.py failure \
+            --manifest /tmp/manifest.json --evidence /tmp/release-evidence.json \
+            --phase artifact --reason artifact_digest_mismatch \
+            --artifact-sha "$artifact_sha" --deployed-sha "$(jq -r .main_snapshot /tmp/manifest.json)" \
+            --receipt /tmp/controlled-failure-receipt.txt
+          exit 1
+      - name: Controlled exact probe failure
+        if: steps.validate.outputs.qualification_case == 'probe_failure'
+        env:
+          DEPLOY_HOST: ${{ vars.DCP_WBC_LAB_HOST }}
+          DEPLOY_USER: ${{ vars.DCP_WBC_LAB_USER }}
+        run: |
+          zero=0000000000000000000000000000000000000000000000000000000000000000
+          set +e
+          printf 'DCP_WBC_LAB_PROBE_V1\n%s\n%s\n%s\n' \
+            "${{ steps.validate.outputs.admitted_head }}" "$zero" "$zero" \
+            | ssh -T -i "$RUNNER_TEMP/dcp-wbc-lab-ssh/key" \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" > /tmp/controlled-failure-receipt.txt 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -Fqx 'DEPLOY_REJECTED|deployed_sha' /tmp/controlled-failure-receipt.txt
+          python3 scripts/release_train.py failure \
+            --manifest /tmp/manifest.json --evidence /tmp/release-evidence.json \
+            --phase probe --reason expected_probe_failure \
+            --deployed-sha "$(jq -r .main_snapshot /tmp/manifest.json)" \
+            --receipt /tmp/controlled-failure-receipt.txt
+          exit 1
       - name: Merge exact admitted head
+        if: steps.validate.outputs.qualification_case == 'valid' || steps.validate.outputs.qualification_case == 'stage3_setup'
         id: merge
         env:
           PR_NUMBER: ${{ steps.validate.outputs.pr_number }}
@@ -57,16 +143,19 @@ jobs:
           printf 'merge_sha=%s\n' "$merge_sha" >> "$GITHUB_OUTPUT"
           printf 'MERGE_SHA=%s\nMERGED_AT=%s\n' "$merge_sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Checkout exact merge
+        if: steps.validate.outputs.qualification_case == 'valid' || steps.validate.outputs.qualification_case == 'stage3_setup'
         run: |
           git fetch origin main
           test "$(git rev-parse origin/main)" = "$MERGE_SHA"
           git checkout --detach "$MERGE_SHA"
           test "$(git rev-parse HEAD)" = "$MERGE_SHA"
       - uses: actions/setup-go@v5
+        if: steps.validate.outputs.qualification_case == 'valid' || steps.validate.outputs.qualification_case == 'stage3_setup'
         with:
           go-version-file: go.mod
           cache: false
       - name: Build immutable artifact
+        if: steps.validate.outputs.qualification_case == 'valid' || steps.validate.outputs.qualification_case == 'stage3_setup'
         id: artifact
         run: |
           mkdir -p dist/root
@@ -79,17 +168,8 @@ jobs:
           artifact_size=$(wc -c < dist/dcp-wbc-integration-lab.tar.gz | tr -d ' ')
           printf 'artifact_sha=%s\nartifact_size=%s\n' "$artifact_sha" "$artifact_size" >> "$GITHUB_OUTPUT"
           printf 'ARTIFACT_SHA=%s\nBUILT_AT=%s\n' "$artifact_sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
-      - name: Configure bounded deployment credential
-        env:
-          DEPLOY_KEY: ${{ secrets.DCP_WBC_LAB_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.DCP_WBC_LAB_KNOWN_HOSTS }}
-        run: |
-          set +x
-          install -d -m 0700 "$RUNNER_TEMP/dcp-wbc-lab-ssh"
-          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/dcp-wbc-lab-ssh/key"
-          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts"
-          chmod 0600 "$RUNNER_TEMP/dcp-wbc-lab-ssh/key" "$RUNNER_TEMP/dcp-wbc-lab-ssh/known_hosts"
       - name: Install and start persistent service
+        if: steps.validate.outputs.qualification_case == 'valid' || steps.validate.outputs.qualification_case == 'stage3_setup'
         env:
           MANIFEST_SHA: ${{ steps.validate.outputs.manifest_digest }}
           ARTIFACT_SIZE: ${{ steps.artifact.outputs.artifact_size }}
@@ -107,6 +187,7 @@ jobs:
           grep -Fqx "DEPLOYED|$MERGE_SHA|$ARTIFACT_SHA|$MANIFEST_SHA|dcp-wbc-integration-lab-selectel|dcp-wbc-integration-lab" /tmp/deploy-receipt.txt
           printf 'INSTALLED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Post-job deployed-SHA health and provenance readback
+        if: steps.validate.outputs.qualification_case == 'valid' || steps.validate.outputs.qualification_case == 'stage3_setup'
         env:
           MANIFEST_SHA: ${{ steps.validate.outputs.manifest_digest }}
           DEPLOY_HOST: ${{ vars.DCP_WBC_LAB_HOST }}
@@ -120,6 +201,7 @@ jobs:
           grep -Fqx "PROBE_OK|$MERGE_SHA|$ARTIFACT_SHA|$MANIFEST_SHA|dcp-wbc-integration-lab-selectel|dcp-wbc-integration-lab" /tmp/probe-receipt.txt
           printf 'PROBED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Create immutable deployment proof
+        if: steps.validate.outputs.qualification_case == 'valid' || steps.validate.outputs.qualification_case == 'stage3_setup'
         run: |
           python3 scripts/release_train.py proof \
             --manifest /tmp/manifest.json \
@@ -129,6 +211,7 @@ jobs:
           test "$(jq -r .artifact_digest /tmp/deploy-proof.json)" = "$ARTIFACT_SHA"
           test "$(jq -r .deployed_sha /tmp/deploy-proof.json)" = "$MERGE_SHA"
       - name: Publish immutable proof artifact
+        if: steps.validate.outputs.qualification_case == 'valid' || steps.validate.outputs.qualification_case == 'stage3_setup'
         uses: actions/upload-artifact@v4
         with:
           name: deploy-proof-${{ steps.validate.outputs.manifest_digest }}
@@ -144,7 +227,10 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: release-evidence-${{ github.run_id }}
+          name: qualification-evidence-${{ github.run_id }}
           retention-days: 90
-          if-no-files-found: ignore
-          path: /tmp/release-evidence.json
+          if-no-files-found: error
+          path: |
+            /tmp/manifest.json
+            /tmp/release-evidence.json
+            /tmp/controlled-failure-receipt.txt

@@ -3,11 +3,21 @@ import argparse
 import base64
 import hashlib
 import json
+import pathlib
 import subprocess
 from datetime import datetime, timezone
 
 
 REPOSITORY = "orenvlad-ai/dcp-wbc-integration-lab"
+QUALIFICATION_CASES = (
+    "stage3_setup",
+    "valid",
+    "head_drift",
+    "main_drift",
+    "wrong_identity",
+    "artifact_mismatch",
+    "probe_failure",
+)
 
 
 def gh(*args: str) -> object:
@@ -28,6 +38,13 @@ def main() -> None:
     parser.add_argument("--revision-id", required=True)
     parser.add_argument("--admission-id", required=True)
     parser.add_argument("--sequence", type=int, required=True)
+    parser.add_argument("--case", choices=QUALIFICATION_CASES, default="valid")
+    parser.add_argument(
+        "--mutate-field",
+        choices=("repository", "base", "pr_number", "required_check"),
+    )
+    parser.add_argument("--output")
+    parser.add_argument("--output-only", action="store_true")
     args = parser.parse_args()
 
     user = gh("user")
@@ -76,8 +93,28 @@ def main() -> None:
         "service": "dcp-wbc-integration-lab",
         "issuer": {"actor": "orenvlad-ai", "event": "workflow_dispatch", "kind": "qualification/v1"},
         "dispatched_at": datetime.now(timezone.utc).isoformat(),
+        "qualification_case": args.case,
     }
+    if args.mutate_field:
+        if args.case != "wrong_identity":
+            raise SystemExit("identity mutation requires wrong_identity case")
+        mutations = {
+            "repository": "orenvlad-ai/not-the-integration-lab",
+            "base": "not-main",
+            "pr_number": 1,
+            "required_check": "not-baseline",
+        }
+        manifest[args.mutate_field] = mutations[args.mutate_field]
     manifest["manifest_digest"] = digest(manifest)
+    if args.output:
+        pathlib.Path(args.output).write_text(
+            json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+        )
+    if args.output_only:
+        if not args.output:
+            raise SystemExit("--output-only requires --output")
+        print(f"issued qualification manifest {manifest['manifest_digest']}")
+        return
     encoded = base64.b64encode(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).decode()
     subprocess.run(
         [

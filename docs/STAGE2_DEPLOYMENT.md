@@ -43,3 +43,20 @@ route.
 The server, Selectel project, shared OS/network, nginx and the protected
 `лучики-добра.рф` application remain outside the lab rollback boundary. No VM
 or other paid Selectel resource is created.
+
+## Stage 3 fixed qualification behavior
+
+The owner-authorized Stage 3 harness keeps the exact Stage 2 destination and
+credential. Its seven cases are valid release/deploy, PR-head drift, main
+drift, wrong repository/base/PR/check identity, equal duplicate delivery,
+artifact-digest mismatch and probe failure. Every negative case publishes an
+immutable typed evidence artifact with zero merge/deploy effects. Equal replay
+reuses the original canonical deployment proof and produces zero second merge
+or deployment.
+
+The two controlled adapter failures use exactly one forced-command call. The
+artifact mismatch is rejected before activation; the probe mismatch is
+read-only. Neither case retries, redeploys, changes the destination, touches a
+protected co-tenant or claims false terminal success. The final persistent
+service must remain the last exact successful release proven by health and
+provenance.
