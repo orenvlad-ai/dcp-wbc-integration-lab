@@ -60,3 +60,11 @@ read-only. Neither case retries, redeploys, changes the destination, touches a
 protected co-tenant or claims false terminal success. The final persistent
 service must remain the last exact successful release proven by health and
 provenance.
+
+The first Stage 3 setup artifact, ID `9402117554` from run `32357196990`,
+truthfully preserved absolute upload paths under `tmp/`. That readback exposed
+the original replay loader's root-only file assumption before any duplicate
+case was dispatched. The one bounded correction accepts exactly one regular
+`manifest.json` and one regular `deploy-proof.json` anywhere below the trusted
+download root; zero or duplicate matches fail closed. The original artifact
+remains immutable evidence of the discovered layout.
