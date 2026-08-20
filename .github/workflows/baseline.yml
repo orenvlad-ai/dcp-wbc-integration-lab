@@ -27,9 +27,11 @@ jobs:
         run: go test ./...
       - name: Contract and security boundaries
         run: python3 scripts/validate.py
+      - name: Release Train model-free tests
+        run: python3 -m unittest scripts/test_release_train.py
       - name: Shell and Python syntax
         run: |
           bash -n deploy/dcp-wbc-lab-deploy
-          python3 -m py_compile scripts/validate.py scripts/release_train.py scripts/issue_qualification_manifest.py
+          python3 -m py_compile scripts/validate.py scripts/release_train.py scripts/issue_qualification_manifest.py scripts/test_release_train.py
       - name: Diff hygiene
         run: git diff --check

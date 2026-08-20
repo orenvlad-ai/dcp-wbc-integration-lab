@@ -38,3 +38,20 @@ branch and performs no retry. Drift produces immutable
 `readmission_required`; an exact admitted head may merge once and is
 nonterminal until the exact artifact is installed, started and proven by
 health plus provenance readback.
+
+## Stage 3 qualification harness
+
+The qualification-only issuer freezes seven model-free cases in
+`target-spec.json`. The train validates repository, base, PR, exact head,
+current main, required check, review and manifest identity before any effect.
+Head or main drift writes one immutable `readmission_required` fact. An equal
+terminal-manifest delivery loads and verifies the original immutable proof and
+performs zero second merge or deployment. Controlled artifact-digest and probe
+failures make one real call to the forced adapter, publish exact failure
+evidence and leave the previously proven service running. There is no
+automatic redeploy, branch synchronization or second issuer.
+
+The fixed negative fixtures address only this repository, environment and
+loopback service. They cannot select another repository, WBC, DCP runtime,
+host path, command or credential. A failure artifact is evidence, never a
+terminal deployment proof.

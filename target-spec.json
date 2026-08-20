@@ -11,6 +11,19 @@
     "kind": "qualification/v1"
   },
   "listener": "127.0.0.1:18321",
+  "qualification_matrix": {
+    "cases": [
+      "valid",
+      "head_drift",
+      "main_drift",
+      "wrong_identity",
+      "duplicate_manifest_event",
+      "artifact_mismatch",
+      "probe_failure"
+    ],
+    "idempotency": "equal-manifest-reuses-terminal-proof/v1",
+    "negative_effects": "no-ref-or-deploy/v1"
+  },
   "release_actor": "github-actions[bot]",
   "repository": "orenvlad-ai/dcp-wbc-integration-lab",
   "repository_id": 1340359100,
